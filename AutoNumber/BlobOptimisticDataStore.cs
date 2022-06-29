@@ -6,28 +6,29 @@ using System.Threading.Tasks;
 using AutoNumber.Extensions;
 using AutoNumber.Interfaces;
 using AutoNumber.Options;
+using Azure;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
 using Microsoft.Extensions.Options;
-using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
 
 namespace AutoNumber
 {
     public class BlobOptimisticDataStore : IOptimisticDataStore
     {
         private const string SeedValue = "1";
-        private readonly CloudBlobContainer blobContainer;
+        private readonly BlobContainerClient blobContainer;
         private readonly ConcurrentDictionary<string, ICloudBlob> blobReferences;
         private readonly object blobReferencesLock = new object();
 
-        public BlobOptimisticDataStore(CloudStorageAccount account, string containerName)
+        public BlobOptimisticDataStore(BlobServiceClient account, string containerName)
         {
-            var blobClient = account.CreateCloudBlobClient();
-            blobContainer = blobClient.GetContainerReference(containerName.ToLower());
+            blobContainer = account.GetBlobContainerClient(containerName.ToLower());
             blobReferences = new ConcurrentDictionary<string, ICloudBlob>();
         }
 
-        public BlobOptimisticDataStore(CloudStorageAccount cloudStorageAccount, IOptions<AutoNumberOptions> options)
-            : this(cloudStorageAccount, options.Value.StorageContainerName)
+        public BlobOptimisticDataStore(BlobServiceClient client, IOptions<AutoNumberOptions> options)
+            : this(client, options.Value.StorageContainerName)
         {
         }
 
@@ -47,9 +48,9 @@ namespace AutoNumber
             }
         }
 
-        public async Task<bool> Init()
+        public async Task Init()
         {
-            return await blobContainer.CreateIfNotExistsAsync().ConfigureAwait(false);
+            await blobContainer.CreateIfNotExistsAsync().ConfigureAwait(false);
         }
 
         public bool TryOptimisticWrite(string blockName, string data)
@@ -60,20 +61,22 @@ namespace AutoNumber
         public async Task<bool> TryOptimisticWriteAsync(string blockName, string data)
         {
             var blobReference = GetBlobReference(blockName);
+
             try
             {
-                await UploadTextAsync(
-                    blobReference,
-                    data,
-                    AccessCondition.GenerateIfMatchCondition(blobReference.Properties.ETag)).ConfigureAwait(false);
+                await blobReference.UploadTextAsync(
+                       data
+                       ).ConfigureAwait(false);
+
             }
-            catch (StorageException exc)
+            catch (RequestFailedException ex)
             {
-                if (exc.RequestInformation.HttpStatusCode == (int) HttpStatusCode.PreconditionFailed)
+                if (ex.Status == (int)HttpStatusCode.PreconditionFailed)
                     return false;
 
                 throw;
             }
+           
 
             return true;
         }
@@ -88,34 +91,71 @@ namespace AutoNumber
 
         private async Task<ICloudBlob> InitializeBlobReferenceAsync(string blockName)
         {
-            var blobReference = blobContainer.GetBlockBlobReference(blockName);
+            var blobClient = blobContainer.GetBlockBlobClient(blockName);
 
-            if (await blobReference.ExistsAsync().ConfigureAwait(false))
-                return blobReference;
+            if (await blobClient.ExistsAsync().ConfigureAwait(false))
+                return new BlobReference(blobClient);
 
-            try
+            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(SeedValue)))
             {
-                await UploadTextAsync(blobReference, SeedValue, AccessCondition.GenerateIfNoneMatchCondition("*"))
-                    .ConfigureAwait(false);
-            }
-            catch (StorageException uploadException)
-            {
-                if (uploadException.RequestInformation.HttpStatusCode != (int) HttpStatusCode.Conflict)
-                    throw;
-            }
 
-            return blobReference;
+                try
+                {
+                    await blobClient.UploadAsync(stream, new BlobHttpHeaders
+                    {
+                        ContentType = "text/plain"
+                    }, conditions: new BlobRequestConditions { IfNoneMatch = ETag.All }
+                          ).ConfigureAwait(false);
+                }
+                catch (RequestFailedException uploadException)
+                {
+                    if (uploadException.Status != (int) HttpStatusCode.Conflict)
+                        throw;
+                }
+
+                return new BlobReference(blobClient);
+            }
+        }
+        
+    }
+
+   
+
+
+    internal class BlobReference : ICloudBlob
+    {
+        public BlobReference(BlockBlobClient client)
+        {
+            this.client = client;
         }
 
-        private async Task UploadTextAsync(ICloudBlob blob, string text, AccessCondition accessCondition)
-        {
-            blob.Properties.ContentType = "utf-8";
-            blob.Properties.ContentType = "text/plain";
 
+        private readonly BlockBlobClient client;
+        private ETag eTag;
+
+        public async Task DownloadToStreamAsync(Stream stream)
+        {
+            var result = await client.DownloadStreamingAsync();
+            eTag = result.Value.Details.ETag;
+            await result.Value.Content.CopyToAsync(stream);
+        }
+
+        public async Task UploadTextAsync(string text)
+        {
             using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(text)))
             {
-                await blob.UploadFromStreamAsync(stream, accessCondition, null, null).ConfigureAwait(false);
+                await client.UploadAsync(stream, new BlobHttpHeaders
+                    {
+                        ContentType = "text/plain"
+                    }, conditions: new BlobRequestConditions { IfMatch = eTag }
+                ).ConfigureAwait(false);
             }
         }
+    }
+
+    internal interface ICloudBlob
+    {
+        Task DownloadToStreamAsync(Stream stream);
+        Task UploadTextAsync(string text);
     }
 }

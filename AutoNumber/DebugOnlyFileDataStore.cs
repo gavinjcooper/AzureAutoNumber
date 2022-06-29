@@ -41,7 +41,7 @@ namespace AutoNumber
             throw new NotImplementedException();
         }
 
-        public Task<bool> Init()
+        public Task Init()
         {
             return Task.FromResult(true);
         }

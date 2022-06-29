@@ -8,6 +8,6 @@ namespace AutoNumber.Interfaces
         Task<string> GetDataAsync(string blockName);
         bool TryOptimisticWrite(string blockName, string data);
         Task<bool> TryOptimisticWriteAsync(string blockName, string data);
-        Task<bool> Init();
+        Task Init();
     }
 }

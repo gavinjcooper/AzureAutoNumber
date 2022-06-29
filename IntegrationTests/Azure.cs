@@ -1,22 +1,20 @@
 ﻿using System;
-using System.IO;
 using System.Text;
-using AutoNumber;
 using AutoNumber.Interfaces;
-using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Specialized;
 using NUnit.Framework;
 
-namespace IntegrationTests.cs
+namespace AutoNumber.IntegrationTests
 {
     [TestFixture]
     public class Azure : Scenarios<TestScope>
     {
-        private readonly CloudStorageAccount storageAccount = CloudStorageAccount.DevelopmentStorageAccount;
+        private readonly BlobServiceClient storageAccount = BlobServiceClientExtensions.DevelopmentStorageAccount;
 
         protected override TestScope BuildTestScope()
         {
-            return new TestScope(CloudStorageAccount.DevelopmentStorageAccount);
+            return new TestScope(BlobServiceClientExtensions.DevelopmentStorageAccount);
         }
 
         protected override IOptimisticDataStore BuildStore(TestScope scope)
@@ -29,15 +27,15 @@ namespace IntegrationTests.cs
 
     public sealed class TestScope : ITestScope
     {
-        private readonly CloudBlobClient blobClient;
+        private readonly BlobContainerClient blobClient;
 
-        public TestScope(CloudStorageAccount account)
+        public TestScope(BlobServiceClient account)
         {
             var ticks = DateTime.UtcNow.Ticks;
             IdScopeName = string.Format("autonumbertest{0}", ticks);
             ContainerName = string.Format("autonumbertest{0}", ticks);
 
-            blobClient = account.CreateCloudBlobClient();
+            blobClient = account.GetBlobContainerClient(ContainerName);
         }
 
         public string ContainerName { get; }
@@ -46,19 +44,14 @@ namespace IntegrationTests.cs
 
         public string ReadCurrentPersistedValue()
         {
-            var blobContainer = blobClient.GetContainerReference(ContainerName);
-            var blob = blobContainer.GetBlockBlobReference(IdScopeName);
-            using (var stream = new MemoryStream())
-            {
-                blob.DownloadToStreamAsync(stream).GetAwaiter().GetResult();
-                return Encoding.UTF8.GetString(stream.ToArray());
-            }
+            var blobContainer = blobClient;
+            var blob = blobContainer.GetBlockBlobClient(IdScopeName);
+            return Encoding.UTF8.GetString(blob.DownloadContent().Value.Content.ToArray());
         }
 
         public void Dispose()
         {
-            var blobContainer = blobClient.GetContainerReference(ContainerName);
-            blobContainer.DeleteAsync().GetAwaiter().GetResult();
+            blobClient.DeleteAsync().GetAwaiter().GetResult();
         }
     }
 }

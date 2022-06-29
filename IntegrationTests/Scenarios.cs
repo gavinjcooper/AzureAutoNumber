@@ -2,11 +2,10 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using AutoNumber;
 using AutoNumber.Interfaces;
 using NUnit.Framework;
 
-namespace IntegrationTests.cs
+namespace AutoNumber.IntegrationTests
 {
     public abstract class Scenarios<TTestScope> where TTestScope : ITestScope
     {

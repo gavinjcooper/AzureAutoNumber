@@ -1,10 +1,9 @@
 ﻿using System;
 using System.IO;
-using AutoNumber;
 using AutoNumber.Interfaces;
 using NUnit.Framework;
 
-namespace IntegrationTests.cs
+namespace AutoNumber.IntegrationTests
 {
     [TestFixture]
     public class File : Scenarios<File.TestScope>
